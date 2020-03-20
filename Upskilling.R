@@ -1,5 +1,4 @@
 #### Recency Model (Main)
-#### AUTHOR: Randy Yee
 #### CREATION DATE: 3/6/2019
 #### NOTE: For CDC Upskilling Project
 #### MODELS: Random Forest, SVM, Max Entropy
