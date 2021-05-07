@@ -1,0 +1,175 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r, echo=FALSE}
+# library(MXM)
+# library(bnlearn)
+# library(bnviewer)
+# library("FactoMineR")
+# library("factoextra")
+library(tidyverse)
+library(ggplot2)
+library(readxl)
+
+library(ROSE)
+library(rpart)
+library(rpart.plot)
+library(rattle)
+
+library(caTools)
+library(caret)
+```
+
+Import cleaned dataset
+
+```{r}
+df <- read_excel("MWI_RecencyClean.xlsx") %>%
+  mutate_if(is.character,as.factor) %>%
+  select(-ANCsite)
+summary(df)
+```
+
+```{r}
+colSums(is.na(df))
+```
+
+```{r}
+summary(df$lag_rita_res)
+```
+
+```{r}
+sample <- sample.split(df$lag_rita_res, SplitRatio = .75)
+train <- subset(df, sample == T)
+test <- subset(df, sample == F)
+
+dim(train)
+dim(test)
+table(df$lag_rita_res)
+table(train$lag_rita_res)
+table(test$lag_rita_res)
+```
+
+```{r}
+undersampling_df <- ovun.sample(lag_rita_res ~.,
+                                data = df,
+                                method = "under",
+                                N = 136,
+                                seed = 2020)
+underdf <- undersampling_df$data
+table(underdf$lag_rita_res)
+
+oversampling_df <- ovun.sample(lag_rita_res ~.,
+                                data = df,
+                                method = "over",
+                                N = 1040,
+                                seed = 2020)
+overdf <- oversampling_df$data
+table(overdf$lag_rita_res)
+
+bothsampling_df <- ovun.sample(lag_rita_res ~.,
+                                data = df,
+                                method = "both",
+                                p = 0.5,
+                                seed = 2020)
+bothdf <- bothsampling_df$data
+table(bothdf$lag_rita_res)
+```
+
+```{r}
+set.seed(2020)
+CART <- rpart(lag_rita_res ~., data = train, method = "class")
+CART.under <- rpart(lag_rita_res ~., data = underdf, method = "class")
+CART.over <- rpart(lag_rita_res ~., data = overdf, method = "class")
+CART.both <- rpart(lag_rita_res ~., data = bothdf, method = "class")
+
+printcp(CART)
+printcp(CART.under)
+printcp(CART.over)
+printcp(CART.both)
+```
+
+```{r}
+model1 <- train(
+  lag_rita_res ~., data = train, method = "rpart",
+  trControl = trainControl("cv", number = 10),
+  tuneLength = 11
+)
+modelunder <- train(
+  lag_rita_res ~., data = underdf, method = "rpart",
+  trControl = trainControl("cv", number = 10),
+  tuneLength = 11
+)
+modelover <- train(
+  lag_rita_res ~., data = overdf, method = "rpart",
+  trControl = trainControl("cv", number = 10),
+  tuneLength = 11
+)
+modelboth <- train(
+  lag_rita_res ~., data = bothdf, method = "rpart",
+  trControl = trainControl("cv", number = 10),
+  tuneLength = 11
+)
+```
+
+```{r}
+plot(model1)
+plot(modelunder)
+plot(modelover)
+plot(modelboth)
+```
+
+```{r}
+model1$bestTune
+modelunder$bestTune
+modelover$bestTune
+modelboth$bestTune
+```
+
+```{r}
+par(xpd = NA)
+plot(model1$finalModel)
+plot(modelunder$finalModel)
+plot(modelover$finalModel)
+plot(modelboth$finalModel)
+```
+
+```{r}
+model1$finalModel
+modelunder$finalModel
+modelover$finalModel
+modelboth$finalModel
+```
+
+```{r}
+predicted.model1 <- model1 %>% predict(test)
+pred_cart <- CART %>% predict(test)
+mean(predicted.model1 == test$lag_rita_res)
+mean(pred_cart == test$lag_rita_res)
+
+predicted.modelunder <- modelunder %>% predict(test)
+mean(predicted.modelunder == test$lag_rita_res)
+pred_cart_under <- CART.under %>% predict(test)
+mean(pred_cart_under == test$lag_rita_res)
+
+predicted.modelover <- modelover %>% predict(test)
+mean(predicted.modelover == test$lag_rita_res)
+
+predicted.modelboth <- modelboth %>% predict(test)
+mean(predicted.modelboth == test$lag_rita_res)
+```
+
+```{r, fig.height=15,fig.width=18}
+ptree <- prune(CART.both, cp = CART.both$cptable[which.min(CART.both$cptable[,"xerror"]),"CP"])
+fancyRpartPlot(ptree, uniform = T, cex = 0.6)
+```
+
+```{r}
+prp(modelboth$finalModel, cex = .7, type = 5, extra = 1, tweak = .7)
+```
+```{r}
+ptree$variable.importance
+```
+
