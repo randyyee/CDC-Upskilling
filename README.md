@@ -1,5 +1,5 @@
 # HIV Recency Prediction
-Prediciting HIV recency with classification and regression trees (CART).
+Predicting HIV recency with classification and regression trees (CART).
 
 ===
 
