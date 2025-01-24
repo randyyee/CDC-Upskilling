@@ -1,0 +1,374 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+# Libraries
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(scales)
+library(GGally)
+library(psych)
+library(gridExtra)
+library(cluster) 
+library(factoextra)
+```
+
+# Data Import and Preparation
+
+```{r}
+df <- read_delim("C:/Users/pcx5/Desktop/MSD_FY20Q3_Site/MSD/MER_Structured_Datasets_Site_IM_FY18-21_20201113_v1_1_Rwanda.txt", 
+                 "\t", 
+                 escape_double = FALSE,
+                 trim_ws = TRUE,
+                 col_types = cols(.default = col_character(), 
+                                  targets = col_double(),
+                                  qtr1 = col_double(),
+                                  qtr2 = col_double(),
+                                  qtr3 = col_double(),
+                                  qtr4 = col_double(),
+                                  cumulative = col_double()
+                 ) 
+) %>%
+  
+  filter(indicator %in% c(
+    "HTS_TST",
+    "HTS_INDEX",
+    "HTS_TST_POS",
+    "HTS_RECENT"
+  ))
+
+
+df <- pivot_longer(df,
+                   targets:cumulative,
+                   names_to = "period",
+                   values_to = "value")
+
+df <- unite(df, 
+            "period", 
+            c("fiscal_year", "period"),
+            sep = "_", 
+            remove = T)
+
+```
+
+# Limit to recency sites only - a site with a 2020 cumulative value for HTS_TST_POS and HTS_RECENT 
+Note: KP not reported under Total Numerator (separate analysis can be done for KP)
+
+RTRI Mods
+```{r}
+unique(filter(df, standardizeddisaggregate == "Modality/Age/Sex/RTRI/HIVStatus" & period == "2020_cumulative")$modality)
+```
+
+Site Totals
+```{r}
+recent_site <- df %>% 
+  filter(period == "2020_cumulative") %>%
+  mutate(disagg = case_when(standardizeddisaggregate == "Total Numerator" ~ "Total Numerator",
+                                       TRUE ~ otherdisaggregate)) %>%
+  filter(disagg %in% c("Total Numerator",
+                                  "Recent RTRI", "Long-Term RTRI",
+                                  "Confirmed Recent", "Confirmed Long-Term")) %>%
+  filter(psnu != "_Military Rwanda") %>%
+  unite("new_indicator", c(indicator, disagg), remove = F) %>%
+  group_by(psnu, orgunituid, new_indicator) %>%
+  summarise(value = sum(value, na.rm = T)) %>%
+  ungroup() %>%
+  pivot_wider(names_from = "new_indicator", values_from = "value") %>%
+  mutate(recent_site = ifelse(!is.na(`HTS_TST_POS_Total Numerator`) & !is.na(`HTS_RECENT_Total Numerator`), TRUE, FALSE)) %>%
+  filter(recent_site == TRUE) %>%
+  select(-recent_site) %>%
+  mutate(COVERAGE = `HTS_RECENT_Total Numerator`/`HTS_TST_POS_Total Numerator`,
+         YIELD = `HTS_TST_POS_Total Numerator`/`HTS_TST_Total Numerator`,
+         RTRI_YIELD = `HTS_RECENT_Recent RTRI`/`HTS_TST_Total Numerator`,
+         RITA_YIELD = `HTS_RECENT_Confirmed Recent`/`HTS_TST_Total Numerator`) %>%
+  select(psnu, orgunituid,
+         `HTS_TST_Total Numerator`, 
+         `HTS_TST_POS_Total Numerator`, 
+         `HTS_RECENT_Total Numerator`,
+         `HTS_RECENT_Recent RTRI`, `HTS_RECENT_Long-Term RTRI`,
+         `HTS_RECENT_Confirmed Recent`, `HTS_RECENT_Confirmed Long-Term`,
+         COVERAGE, YIELD, RTRI_YIELD, RITA_YIELD) %>%
+  mutate_if(is.numeric , replace_na, replace = 0)
+
+sum(recent_site$`HTS_TST_Total Numerator`, na.rm = T)
+sum(recent_site$`HTS_TST_POS_Total Numerator`, na.rm = T)
+sum(recent_site$`HTS_RECENT_Total Numerator`, na.rm = T)
+sum(recent_site$`HTS_RECENT_Recent RTRI`, na.rm = T)
+sum(recent_site$`HTS_RECENT_Long-Term RTRI`, na.rm = T)
+
+write.csv(recent_site,"RW_RecentSites1_FY20.csv", na = "", row.names = F)
+```
+
+```{r}
+recent_site_list <- unique(recent_site %>% select(psnu, orgunituid))
+```
+
+Modified Index Cascade
+```{r}
+recent_cascade <- df %>% 
+  filter(period == "2020_cumulative") %>%
+  mutate(disagg = case_when(
+                            standardizeddisaggregate == "1:Age/Sex/IndexCasesOffered" ~ "1 Index",
+                            standardizeddisaggregate == "2:Age/Sex/IndexCasesAccepted" ~ "2 Accepted",
+                            standardizeddisaggregate == "3:Age Aggregated/Sex/Contacts" ~ "3 Contacts",
+                            standardizeddisaggregate == "4:Age/Sex/Result" &
+                              otherdisaggregate == "Newly Identified" &
+                              statushiv == "Positive" ~ "4 NewPOS",
+                            standardizeddisaggregate == "4:Age/Sex/Result" &
+                              otherdisaggregate == "Newly Identified" &
+                              statushiv == "Negative" ~ "4 NewNEG",
+                            standardizeddisaggregate == "4:Age/Sex/Result" &
+                              otherdisaggregate == "Known at Entry" &
+                              statushiv == "Positive" ~ "4 KnownPOS",
+                            
+                            standardizeddisaggregate == "Modality/Age/Sex/RTRI/HIVStatus" &
+                              modality == "Index" &
+                              otherdisaggregate == "Recent RTRI" ~ "Recent RTRI Index",
+                            
+                                                        standardizeddisaggregate == "Modality/Age/Sex/RTRI/HIVStatus" &
+                              modality == "Index" &
+                              otherdisaggregate == "Long-Term RTRI" ~ "Long-Term RTRI Index",
+                            
+                            
+                                       TRUE ~ otherdisaggregate)) %>%
+  filter(disagg %in% c(
+                       "1 Index", "2 Accepted",
+                       "3 Contacts",
+                       "4 NewPOS", "4 NewNEG", "4 KnownPOS",
+                       "Recent RTRI Index", "Long-Term RTRI Index")) %>%
+  filter(psnu != "_Military Rwanda") %>%
+  unite("new_indicator", c(indicator, disagg), remove = F) %>%
+  group_by(psnu, orgunituid, new_indicator) %>%
+  summarise(value = sum(value, na.rm = T)) %>%
+  ungroup() %>%
+  pivot_wider(names_from = "new_indicator", values_from = "value") %>%
+  select(psnu, orgunituid,
+         `HTS_INDEX_1 Index`,
+         `HTS_INDEX_2 Accepted`,
+         `HTS_INDEX_3 Contacts`,
+         `HTS_INDEX_4 KnownPOS`,
+         `HTS_INDEX_4 NewNEG`,
+         `HTS_INDEX_4 NewPOS`, 
+         `HTS_RECENT_Recent RTRI Index`,
+         `HTS_RECENT_Long-Term RTRI Index`) %>%
+  mutate_if(is.numeric , replace_na, replace = 0)
+
+cascade_df <- left_join(recent_site, recent_cascade)
+
+write.csv(cascade_df,"RW_RecentCascade1_FY20.csv", na = "", row.names = F)
+```
+
+# Exploration
+
+## Descriptive Statistics for Rwanda FY2020 Cumulative
+
+```{r}
+summary(recent_site)
+```
+
+## By PSNU
+
+```{r}
+recent_site %>% split(.$psnu) %>% map(summary)
+```
+
+
+## Boxplots of Sites by PSNU
+
+```{r}
+ggplot(recent_site, aes(y = COVERAGE, x = psnu, col = psnu)) + 
+  geom_boxplot() + theme_minimal() + theme(legend.position = "none", axis.title.x = element_blank())
+
+ggplot(recent_site, aes(y = YIELD, x = psnu, col = psnu)) + 
+  geom_boxplot() + theme_minimal() + theme(legend.position = "none", axis.title.x = element_blank())
+
+ggplot(recent_site, aes(y = RTRI_YIELD, x = psnu, col = psnu)) + 
+  geom_boxplot() + theme_minimal() + theme(legend.position = "none", axis.title.x = element_blank())
+
+ggplot(recent_site, aes(y = RITA_YIELD, x = psnu, col = psnu)) + 
+  geom_boxplot() + theme_minimal() + theme(legend.position = "none", axis.title.x = element_blank())
+```
+
+## Correlation Matrix
+
+```{r}
+ggpairs(select(recent_site, -orgunituid), aes(color = psnu)) + theme_minimal()
+```
+
+## Clustering
+
+```{r}
+test <- recent_site %>% column_to_rownames("orgunituid") %>% select(-c(psnu#,
+                                                                       #`HTS_RECENT_Total Numerator`, COVERAGE, YIELD, RTRI_YIELD, RITA_YIELD
+                                                                       ))
+test <- scale(test)
+unique(recent_site$psnu)
+# Using the number of PSNUs to start off
+km.res <- kmeans(test, centers = 3, nstart = 25)
+
+aggregate(test, by=list(cluster=km.res$cluster), mean)
+d <- cbind(test, cluster = km.res$cluster)
+
+fviz_cluster(km.res, data = test)
+
+test %>%
+  as_tibble() %>%
+  mutate(cluster = km.res$cluster,
+         site = row.names(test)) %>%
+  ggplot(aes(`HTS_TST_POS_Total Numerator`, `HTS_RECENT_Confirmed Recent`, color = factor(cluster), label = site)) +
+  geom_text()
+```
+
+```{r}
+k2 <- kmeans(test, centers = 2, nstart = 25)
+k3 <- kmeans(test, centers = 3, nstart = 25)
+k4 <- kmeans(test, centers = 4, nstart = 25)
+k5 <- kmeans(test, centers = 5, nstart = 25)
+
+# plots to compare
+p1 <- fviz_cluster(k2, geom = "point", data = test) + ggtitle("k = 2")
+p2 <- fviz_cluster(k3, geom = "point",  data = test) + ggtitle("k = 3")
+p3 <- fviz_cluster(k4, geom = "point",  data = test) + ggtitle("k = 4")
+p4 <- fviz_cluster(k5, geom = "point",  data = test) + ggtitle("k = 5")
+
+grid.arrange(p1, p2, p3, p4, nrow = 2)
+k3$cluster
+
+d <- cbind(recent_site, cluster = k4$cluster)
+```
+
+```{r}
+set.seed(123)
+
+fviz_nbclust(test, kmeans, method = "wss")
+```
+
+```{r}
+fviz_nbclust(test, kmeans, method = "silhouette")
+```
+
+```{r}
+gap_stat <- clusGap(test, FUN = kmeans, nstart = 25,
+                    K.max = 10, B = 50)
+# Print the result
+print(gap_stat, method = "firstmax")
+fviz_gap_stat(gap_stat)
+```
+
+
+## Positives Mix of Modality
+
+```{r}
+
+```
+
+
+# When did each site start reporting recency results?
+
+```{r}
+df %>%
+  filter(psnu != "_Military Rwanda") %>% 
+  filter(indicator == "HTS_RECENT" & standardizeddisaggregate == "Total Numerator") %>%
+  filter(str_detect(period, "qtr")) %>%
+  filter(!str_detect(period, "2021"))%>%
+  filter(!is.na(value)) %>%
+  group_by(psnu, orgunituid) %>%
+  summarise(first_report = min(period),
+            last_report = max(period)) %>%
+  ungroup() %>%
+  group_by(psnu, first_report) %>%
+  summarise(n = n()) %>%
+  ungroup()
+```
+
+```{r}
+df %>%
+  filter(psnu != "_Military Rwanda") %>% 
+  filter(indicator == "HTS_RECENT" & standardizeddisaggregate == "Total Numerator") %>%
+  filter(str_detect(period, "qtr")) %>%
+  filter(!str_detect(period, "2021")) %>%
+  filter(!is.na(value)) %>%
+  group_by(psnu, orgunituid, period) %>%
+  summarise(value = sum(value)) %>%
+  ungroup() %>%
+  mutate(Report = case_when(value != 0 ~ 1)) %>% 
+  ggplot(aes(x = period, y = orgunituid, group = orgunituid,  col = Report)) + 
+  geom_line() + 
+  geom_point(shape = 15) + 
+  theme_minimal() +
+  labs(title = "Site Reporting Completeness Timelines") +
+  theme(axis.text.y = element_text(size=5), 
+        axis.text.x = element_text(angle=90),
+        legend.position = "none",
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank()) +
+  facet_wrap(~psnu, scales = "free_y")
+```
+
+# Is RTRI yield significantly different from yield?
+
+```{r}
+by.site.differences <- recent_site[,"YIELD"] - recent_site[,"RTRI_YIELD"]
+hist(by.site.differences[,1])
+qqnorm(by.site.differences[,1])
+shapiro.test(by.site.differences[,1])
+```
+
+```{r}
+site_yield <- pull(recent_site, YIELD)
+site_rtri_yield <- pull(recent_site, RTRI_YIELD)
+wilcox.test(site_yield, site_rtri_yield)
+```
+
+# Is RTRI yield significantly different than the RITA yield?
+
+```{r}
+by.site.differences <- recent_site[,"RTRI_YIELD"] - recent_site[,"RITA_YIELD"]
+hist(by.site.differences[,1])
+qqnorm(by.site.differences[,1])
+shapiro.test(by.site.differences[,1])
+```
+
+```{r}
+site_rita_yield <- pull(recent_site, RITA_YIELD)
+
+wilcox.test(site_rtri_yield, site_rita_yield, paired = TRUE)
+```
+
+```{r}
+cor.test(site_rtri_yield, site_rita_yield,  method="kendall")
+```
+
+```{r}
+cor.test(site_rtri_yield, site_rita_yield,  method="spearman")
+```
+
+# Do we see any association between yield and RTRI yield? Are higher yield sites also finding more recent positives?
+
+```{r}
+cor.test(site_yield, site_rtri_yield,  method="kendall")
+```
+
+```{r}
+cor.test(site_yield, site_rtri_yield,  method = "spearman")
+```
+
+## Testing by PSNU
+
+```{r}
+recent_site %>% select(-orgunituid) %>% split(.$psnu) %>% map(cor, method = "spearman")
+```
+
+
+```{r}
+ggplot(recent_site, aes(x=YIELD, y=RTRI_YIELD)) + geom_point() + facet_wrap(~psnu)
+```
+
+```{r}
+t <- recent_site %>% mutate(NEG = `HTS_TST_Total Numerator`-`HTS_TST_POS_Total Numerator`,
+                       DENOM = NEG + `HTS_RECENT_Confirmed Long-Term`)
+```
+
